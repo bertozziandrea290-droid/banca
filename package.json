@@ -2,9 +2,9 @@
   "name": "bot-banca-rp",
   "version": "2.0.0",
   "description": "Bot Discord per la gestione dell'economia bancaria Roleplay",
-  "main": "index.js",
+  "main": "banca.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node banca.js"
   },
   "dependencies": {
     "discord.js": "^14.14.1",

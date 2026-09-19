@@ -21,7 +21,7 @@ const RUOLO_STAFF_ID = '1545516649388703754';           // Ruolo Staff generale 
 const RUOLO_ADMIN_ID = '1488506245848764466';           // Ruolo Amministrazione per comandi gestionali avanzati
 const CANALE_STAFF_ID = '1475938917818564688';          // Canale dove inviare le richieste di apertura conto
 
-// --- 1. KEEP-ALIVE SERVER PER RENDER + UPTIMEROBOT ---
+// --- 1. KEEP-ALIVE SERVER PER RENDER ---
 const app = express();
 const PORT = process.env.PORT || 8080;
 
@@ -40,18 +40,22 @@ const pool = new Pool({
 });
 
 async function initDb() {
-    await pool.query(`
-        CREATE TABLE IF NOT EXISTS conti (
-            user_id VARCHAR(30) PRIMARY KEY,
-            saldo BIGINT DEFAULT 0,
-            contanti BIGINT DEFAULT 500,
-            ha_conto INT DEFAULT 0,
-            ultimo_stipendio BIGINT DEFAULT 0
-        )
-    `);
-    console.log('✅ Database PostgreSQL connesso e inizializzato!');
+    try {
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS conti (
+                user_id VARCHAR(30) PRIMARY KEY,
+                saldo BIGINT DEFAULT 0,
+                contanti BIGINT DEFAULT 500,
+                ha_conto INT DEFAULT 0,
+                ultimo_stipendio BIGINT DEFAULT 0
+            )
+        `);
+        console.log('✅ Database PostgreSQL connesso e inizializzato!');
+    } catch (err) {
+        console.error('❌ Errore connessione DB:', err);
+    }
 }
-initDb().catch(console.error);
+initDb();
 
 async function getUtente(userId) {
     const res = await pool.query('SELECT * FROM conti WHERE user_id = $1', [userId]);
@@ -105,7 +109,7 @@ async function aggiornaStipendio(userId, timestamp) {
     await pool.query('UPDATE conti SET ultimo_stipendio = $1 WHERE user_id = $2', [timestamp, userId]);
 }
 
-// --- FUNZIONI AUSILIARIE ---
+// --- FUNZIONI AUSILIARIE GIOCHI ---
 function generaCarta() {
     const carte = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
     return carte[Math.floor(Math.random() * carte.length)];
@@ -251,7 +255,7 @@ client.on('guildMemberAdd', async member => {
     }
 });
 
-// PANNELLO BANCA
+// PANNELLO BANCA (!banca)
 client.on('messageCreate', async message => {
     if (message.author.bot) return;
 
@@ -298,59 +302,67 @@ client.on('messageCreate', async message => {
     }
 });
 
-// GESTIONE INTERAZIONI
+// GESTIONE INTERAZIONI (PULSANTI E SLASH COMMANDS)
 client.on('interactionCreate', async interaction => {
+    // --- 1. PULSANTI ---
     if (interaction.isButton()) {
         const { customId, user, guild, member } = interaction;
 
+        // APRI CONTO
         if (customId === 'apri_conto') {
-            // Differisci la risposta ephemerale per evitare il timeout dei 3 secondi
-            await interaction.deferReply({ flags: 64 });
-            const userData = await getUtente(user.id);
+            await interaction.deferReply({ ephemeral: true });
+            try {
+                const userData = await getUtente(user.id);
 
-            if (userData.ha_conto === 1) {
-                return interaction.editReply({ content: '⚠️ Risulta già attivo un conto corrente intestato a questo profilo.' });
+                if (userData.ha_conto === 1) {
+                    return interaction.editReply({ content: '⚠️ Risulta già attivo un conto corrente intestato a questo profilo.' });
+                }
+
+                const staffChannel = guild.channels.cache.get(CANALE_STAFF_ID);
+                if (!staffChannel) {
+                    return interaction.editReply({ content: '❌ Errore: Canale Staff non trovato o ID configurato errato.' });
+                }
+
+                const embedStaff = new EmbedBuilder()
+                    .setTitle('📋 NUOVA PRATICA APERTURA CONTO')
+                    .setDescription('Un cittadino ha inoltrato una richiesta formale di apertura conto corrente.')
+                    .setColor(0xE67E22)
+                    .setThumbnail(user.displayAvatarURL({ dynamic: true, size: 256 }))
+                    .addFields(
+                        { name: '👤 Richiedente', value: `${user}\n\`${user.tag}\``, inline: true },
+                        { name: '🆔 ID Utente', value: `\`${user.id}\``, inline: true },
+                        { name: '💵 Contanti Attuali', value: `\`${userData.contanti.toLocaleString('it-IT')} €\``, inline: true },
+                        { name: '🎁 Bonus Benvenuto', value: '`1.000 €`', inline: true },
+                        { name: '📌 Stato Pratica', value: '⏳ **In attesa di revisione**', inline: true }
+                    )
+                    .setFooter({ text: 'Sistema di Gestione Pratiche • Banca RP', iconURL: guild.iconURL() })
+                    .setTimestamp();
+
+                const rowStaff = new ActionRowBuilder().addComponents(
+                    new ButtonBuilder().setCustomId(`approva_${user.id}`).setLabel('Approva Conto').setEmoji('✅').setStyle(ButtonStyle.Success),
+                    new ButtonBuilder().setCustomId(`rifiuta_${user.id}`).setLabel('Rifiuta Conto').setEmoji('❌').setStyle(ButtonStyle.Danger)
+                );
+
+                await staffChannel.send({ embeds: [embedStaff], components: [rowStaff] });
+
+                const embedConferma = new EmbedBuilder()
+                    .setTitle('📨 Richiesta Inviata!')
+                    .setDescription('La tua richiesta di apertura conto è stata presa in carico dallo Staff.\nRiceverai una notifica non appena verrà revisionata.')
+                    .setColor(0x3498DB);
+
+                return interaction.editReply({ embeds: [embedConferma] });
+            } catch (err) {
+                console.error('Errore apri_conto:', err);
+                return interaction.editReply({ content: '❌ Errore durante l\'elaborazione della richiesta.' });
             }
-
-            const staffChannel = guild.channels.cache.get(CANALE_STAFF_ID);
-            if (!staffChannel) return interaction.editReply({ content: '❌ Canale Staff non trovato.' });
-
-            const embedStaff = new EmbedBuilder()
-                .setTitle('📋 NUOVA PRATICA APERTURA CONTO')
-                .setDescription('Un cittadino ha inoltrato una richiesta formale di apertura conto corrente.')
-                .setColor(0xE67E22)
-                .setThumbnail(user.displayAvatarURL({ dynamic: true, size: 256 }))
-                .addFields(
-                    { name: '👤 Richiedente', value: `${user}\n\`${user.tag}\``, inline: true },
-                    { name: '🆔 ID Utente', value: `\`${user.id}\``, inline: true },
-                    { name: '💵 Contanti Attuali', value: `\`${userData.contanti.toLocaleString('it-IT')} €\``, inline: true },
-                    { name: '🎁 Bonus Benvenuto', value: '`1.000 €`', inline: true },
-                    { name: '📌 Stato Pratica', value: '⏳ **In attesa di revisione**', inline: true }
-                )
-                .setFooter({ text: 'Sistema di Gestione Pratiche • Banca RP', iconURL: guild.iconURL() })
-                .setTimestamp();
-
-            const rowStaff = new ActionRowBuilder().addComponents(
-                new ButtonBuilder().setCustomId(`approva_${user.id}`).setLabel('Approva Conto').setEmoji('✅').setStyle(ButtonStyle.Success),
-                new ButtonBuilder().setCustomId(`rifiuta_${user.id}`).setLabel('Rifiuta Conto').setEmoji('❌').setStyle(ButtonStyle.Danger)
-            );
-
-            await staffChannel.send({ embeds: [embedStaff], components: [rowStaff] });
-
-            const embedConferma = new EmbedBuilder()
-                .setTitle('📨 Richiesta Inviata!')
-                .setDescription('La tua richiesta di apertura conto è stata presa in carico dallo Staff.\nRiceverai una notifica non appena verrà revisionata.')
-                .setColor(0x3498DB);
-
-            return interaction.editReply({ embeds: [embedConferma] });
         }
 
+        // APPROVAZIONE O RIFIUTO DA PARTE DELLO STAFF
         if (customId.startsWith('approva_') || customId.startsWith('rifiuta_')) {
-            // Differisci l'aggiornamento del messaggio nel canale Staff
             await interaction.deferUpdate();
 
             if (!member.roles.cache.has(RUOLO_STAFF_ID) && !member.roles.cache.has(RUOLO_ADMIN_ID)) {
-                return interaction.followUp({ content: '🚫 Non sei autorizzato a gestire questa pratica.', flags: 64 });
+                return interaction.followUp({ content: '🚫 Non sei autorizzato a gestire questa pratica.', ephemeral: true });
             }
 
             const action = customId.split('_')[0];
@@ -416,8 +428,9 @@ client.on('interactionCreate', async interaction => {
             return;
         }
 
+        // SALDO RAPIDO
         if (customId === 'saldo_rapido') {
-            await interaction.deferReply({ flags: 64 });
+            await interaction.deferReply({ ephemeral: true });
             const userData = await getUtente(user.id);
 
             if (userData.ha_conto === 0) return interaction.editReply({ content: '❌ Nessun conto attivo trovato.' });
@@ -434,8 +447,9 @@ client.on('interactionCreate', async interaction => {
             return interaction.editReply({ embeds: [embedSaldo] });
         }
 
+        // CHIUDI CONTO
         if (customId === 'chiudi_conto') {
-            await interaction.deferReply({ flags: 64 });
+            await interaction.deferReply({ ephemeral: true });
             const userData = await getUtente(user.id);
 
             if (userData.ha_conto === 0) return interaction.editReply({ content: '⚠️ Non possiedi un conto da chiudere.' });
@@ -452,6 +466,7 @@ client.on('interactionCreate', async interaction => {
         }
     }
 
+    // --- 2. COMANDI SLASH ---
     if (!interaction.isChatInputCommand()) return;
     const { commandName, options, user, member } = interaction;
     const userData = await getUtente(user.id);
@@ -462,26 +477,26 @@ client.on('interactionCreate', async interaction => {
         if (!member.roles.cache.has(RUOLO_ADMIN_ID)) {
             return interaction.reply({ 
                 content: `🚫 **Accesso Negato!** Solamente i membri con il ruolo Amministrazione (<@&${RUOLO_ADMIN_ID}>) possono utilizzare questo comando.`, 
-                flags: 64 
+                ephemeral: true 
             });
         }
     }
 
-    // COMANDO STIPENDIO (PRIVATO CON EMBED)
+    // COMANDO STIPENDIO
     if (commandName === 'stipendio') {
         const haDisoccupazione = member.roles.cache.has(RUOLO_DISOCCUPAZIONE_ID);
         const haStipendio500 = member.roles.cache.has(RUOLO_STIPENDIO_500_ID);
 
         if (!haDisoccupazione && !haStipendio500) {
-            return interaction.reply({ content: `❌ Non possiedi un ruolo idoneo per riscuotere uno stipendio.`, flags: 64 });
+            return interaction.reply({ content: `❌ Non possiedi un ruolo idoneo per riscuotere uno stipendio.`, ephemeral: true });
         }
-        if (userData.ha_conto === 0) return interaction.reply({ content: '❌ Devi prima aprire un conto corrente bancario per ricevere l\'accredito.', flags: 64 });
+        if (userData.ha_conto === 0) return interaction.reply({ content: '❌ Devi prima aprire un conto corrente bancario per ricevere l\'accredito.', ephemeral: true });
 
         const ORA = Date.now();
         const COOLDOWN = 24 * 60 * 60 * 1000;
         if (ORA - userData.ultimo_stipendio < COOLDOWN) {
             const ore = Math.ceil((COOLDOWN - (ORA - userData.ultimo_stipendio)) / (1000 * 60 * 60));
-            return interaction.reply({ content: `⏳ Hai già riscosso lo stipendio! Riprova tra **${ore} ore**.`, flags: 64 });
+            return interaction.reply({ content: `⏳ Hai già riscosso lo stipendio! Riprova tra **${ore} ore**.`, ephemeral: true });
         }
 
         let importoStipendio = haStipendio500 ? 500 : 100;
@@ -499,24 +514,23 @@ client.on('interactionCreate', async interaction => {
             .setFooter({ text: 'Banca Centrale Roleplay • Accrediti' })
             .setTimestamp();
 
-        return interaction.reply({ embeds: [embedStipendio], flags: 64 });
+        return interaction.reply({ embeds: [embedStipendio], ephemeral: true });
     }
 
-    // COMANDO BONIFICO (PRIVATO CON EMBED)
+    // COMANDO BONIFICO
     if (commandName === 'bonifico') {
         const destinatario = options.getUser('destinatario');
         const importo = options.getInteger('importo');
         const destData = await getUtente(destinatario.id);
 
-        if (userData.ha_conto === 0) return interaction.reply({ content: '❌ Devi possedere un conto corrente per inviare un bonifico.', flags: 64 });
-        if (destData.ha_conto === 0) return interaction.reply({ content: '❌ Il destinatario non possiede un conto corrente attivo.', flags: 64 });
-        if (importo <= 0 || userData.saldo < importo) return interaction.reply({ content: '❌ Importo non valido o saldo bancario insufficiente.', flags: 64 });
-        if (destinatario.id === user.id) return interaction.reply({ content: '❌ Non puoi inviare un bonifico a te stesso.', flags: 64 });
+        if (userData.ha_conto === 0) return interaction.reply({ content: '❌ Devi possedere un conto corrente per inviare un bonifico.', ephemeral: true });
+        if (destData.ha_conto === 0) return interaction.reply({ content: '❌ Il destinatario non possiede un conto corrente attivo.', ephemeral: true });
+        if (importo <= 0 || userData.saldo < importo) return interaction.reply({ content: '❌ Importo non valido o saldo bancario insufficiente.', ephemeral: true });
+        if (destinatario.id === user.id) return interaction.reply({ content: '❌ Non puoi inviare un bonifico a te stesso.', ephemeral: true });
 
         const nuovoSaldoMittente = await modificaSaldo(user.id, -importo);
         const nuovoSaldoDestinatario = await modificaSaldo(destinatario.id, importo);
 
-        // Embed per il mittente (Privato)
         const embedMittente = new EmbedBuilder()
             .setTitle('💸 BONIFICO ESEGUITO CON SUCCESSO')
             .setColor(0x3498DB)
@@ -528,7 +542,6 @@ client.on('interactionCreate', async interaction => {
             .setFooter({ text: 'Banca Centrale Roleplay • Trasferimenti' })
             .setTimestamp();
 
-        // Notifica DM per il destinatario
         const targetMember = await interaction.guild.members.fetch(destinatario.id).catch(() => null);
         if (targetMember) {
             const embedDM = new EmbedBuilder()
@@ -545,14 +558,14 @@ client.on('interactionCreate', async interaction => {
             await targetMember.send({ embeds: [embedDM] }).catch(() => {});
         }
 
-        return interaction.reply({ embeds: [embedMittente], flags: 64 });
+        return interaction.reply({ embeds: [embedMittente], ephemeral: true });
     }
 
-    // COMANDO DEPOSITO (PRIVATO CON EMBED)
+    // COMANDO DEPOSITO
     if (commandName === 'deposito') {
         const importo = options.getInteger('importo');
         if (userData.ha_conto === 0 || importo <= 0 || userData.contanti < importo) {
-            return interaction.reply({ content: '❌ Operazione non valida o contanti in tasca insufficienti.', flags: 64 });
+            return interaction.reply({ content: '❌ Operazione non valida o contanti in tasca insufficienti.', ephemeral: true });
         }
 
         const nuoviContanti = await modificaContanti(user.id, -importo);
@@ -569,14 +582,14 @@ client.on('interactionCreate', async interaction => {
             .setFooter({ text: 'Banca Centrale Roleplay' })
             .setTimestamp();
 
-        return interaction.reply({ embeds: [embedDeposito], flags: 64 });
+        return interaction.reply({ embeds: [embedDeposito], ephemeral: true });
     }
 
-    // COMANDO PRELIEVO (PRIVATO CON EMBED)
+    // COMANDO PRELIEVO
     if (commandName === 'prelievo') {
         const importo = options.getInteger('importo');
         if (userData.ha_conto === 0 || importo <= 0 || userData.saldo < importo) {
-            return interaction.reply({ content: '❌ Operazione non valida o saldo bancario insufficiente.', flags: 64 });
+            return interaction.reply({ content: '❌ Operazione non valida o saldo bancario insufficiente.', ephemeral: true });
         }
 
         const nuovoSaldo = await modificaSaldo(user.id, -importo);
@@ -593,14 +606,14 @@ client.on('interactionCreate', async interaction => {
             .setFooter({ text: 'Banca Centrale Roleplay' })
             .setTimestamp();
 
-        return interaction.reply({ embeds: [embedPrelievo], flags: 64 });
+        return interaction.reply({ embeds: [embedPrelievo], ephemeral: true });
     }
 
-    // COMANDI AMMINISTRAZIONE (PRIVATI CON EMBED)
+    // COMANDI AMMINISTRAZIONE
     if (commandName === 'paga') {
         const target = options.getUser('utente');
         const importo = options.getInteger('importo');
-        if (importo <= 0) return interaction.reply({ content: '❌ Inserisci un importo valido.', flags: 64 });
+        if (importo <= 0) return interaction.reply({ content: '❌ Inserisci un importo valido.', ephemeral: true });
 
         const s = await modificaSaldo(target.id, importo);
         const embed = new EmbedBuilder()
@@ -614,13 +627,13 @@ client.on('interactionCreate', async interaction => {
             .setFooter({ text: 'Registro Operazioni Riservate' })
             .setTimestamp();
 
-        return interaction.reply({ embeds: [embed], flags: 64 });
+        return interaction.reply({ embeds: [embed], ephemeral: true });
     }
 
     if (commandName === 'multa') {
         const target = options.getUser('utente');
         const importo = options.getInteger('importo');
-        if (importo <= 0) return interaction.reply({ content: '❌ Inserisci un importo valido.', flags: 64 });
+        if (importo <= 0) return interaction.reply({ content: '❌ Inserisci un importo valido.', ephemeral: true });
 
         const s = await modificaSaldo(target.id, -importo);
         const embed = new EmbedBuilder()
@@ -634,13 +647,13 @@ client.on('interactionCreate', async interaction => {
             .setFooter({ text: 'Registro Operazioni Riservate' })
             .setTimestamp();
 
-        return interaction.reply({ embeds: [embed], flags: 64 });
+        return interaction.reply({ embeds: [embed], ephemeral: true });
     }
 
     if (commandName === 'set-saldo') {
         const target = options.getUser('utente');
         const importo = options.getInteger('importo');
-        if (importo < 0) return interaction.reply({ content: '❌ L\'importo non può essere negativo.', flags: 64 });
+        if (importo < 0) return interaction.reply({ content: '❌ L\'importo non può essere negativo.', ephemeral: true });
 
         await impostaSaldoFisso(target.id, importo);
 
@@ -655,13 +668,13 @@ client.on('interactionCreate', async interaction => {
             .setFooter({ text: 'Registro Operazioni Riservate' })
             .setTimestamp();
 
-        return interaction.reply({ embeds: [embedSet], flags: 64 });
+        return interaction.reply({ embeds: [embedSet], ephemeral: true });
     }
 
     if (commandName === 'set-contanti') {
         const target = options.getUser('utente');
         const importo = options.getInteger('importo');
-        if (importo < 0) return interaction.reply({ content: '❌ L\'importo non può essere negativo.', flags: 64 });
+        if (importo < 0) return interaction.reply({ content: '❌ L\'importo non può essere negativo.', ephemeral: true });
 
         await impostaContantiFissi(target.id, importo);
 
@@ -676,7 +689,7 @@ client.on('interactionCreate', async interaction => {
             .setFooter({ text: 'Registro Operazioni Riservate' })
             .setTimestamp();
 
-        return interaction.reply({ embeds: [embedSet], flags: 64 });
+        return interaction.reply({ embeds: [embedSet], ephemeral: true });
     }
 
     if (commandName === 'reset-conto') {
@@ -691,13 +704,13 @@ client.on('interactionCreate', async interaction => {
             .setFooter({ text: 'Registro Operazioni Riservate' })
             .setTimestamp();
 
-        return interaction.reply({ embeds: [embedReset], flags: 64 });
+        return interaction.reply({ embeds: [embedReset], ephemeral: true });
     }
 
     if (commandName === 'conto') {
         const target = options.getUser('utente') || user;
         const targetData = await getUtente(target.id);
-        if (targetData.ha_conto === 0) return interaction.reply({ content: '❌ Nessun conto attivo trovato per questo cittadino.', flags: 64 });
+        if (targetData.ha_conto === 0) return interaction.reply({ content: '❌ Nessun conto attivo trovato per questo cittadino.', ephemeral: true });
 
         const embed = new EmbedBuilder()
             .setTitle('🏛️ ESTRATTO CONTO UFFICIALE')
@@ -711,7 +724,7 @@ client.on('interactionCreate', async interaction => {
             .setFooter({ text: 'Banca Centrale Roleplay' })
             .setTimestamp();
 
-        return interaction.reply({ embeds: [embed], flags: 64 });
+        return interaction.reply({ embeds: [embed], ephemeral: true });
     }
 
     if (commandName === 'casino') {
@@ -719,7 +732,7 @@ client.on('interactionCreate', async interaction => {
         const importo = options.getInteger('importo');
 
         if (userData.ha_conto === 0 || importo <= 0 || userData.saldo < importo) {
-            return interaction.reply({ content: '❌ Saldo insufficiente o conto assente.', flags: 64 });
+            return interaction.reply({ content: '❌ Saldo insufficiente o conto assente.', ephemeral: true });
         }
 
         if (gioco === 'slot') {
@@ -734,10 +747,10 @@ client.on('interactionCreate', async interaction => {
 
             if (molt > 0) {
                 const nuovoSaldo = await modificaSaldo(user.id, (importo * molt) - importo);
-                return interaction.reply({ content: `🎰 [ ${s1} | ${s2} | ${s3} ] — **VINTO!** +${(importo * molt).toLocaleString('it-IT')} € (Saldo: ${nuovoSaldo.toLocaleString('it-IT')} €)`, flags: 64 });
+                return interaction.reply({ content: `🎰 [ ${s1} | ${s2} | ${s3} ] — **VINTO!** +${(importo * molt).toLocaleString('it-IT')} € (Saldo: ${nuovoSaldo.toLocaleString('it-IT')} €)`, ephemeral: true });
             } else {
                 const nuovoSaldo = await modificaSaldo(user.id, -importo);
-                return interaction.reply({ content: `🎰 [ ${s1} | ${s2} | ${s3} ] — **PERSO!** -${importo.toLocaleString('it-IT')} € (Saldo: ${nuovoSaldo.toLocaleString('it-IT')} €)`, flags: 64 });
+                return interaction.reply({ content: `🎰 [ ${s1} | ${s2} | ${s3} ] — **PERSO!** -${importo.toLocaleString('it-IT')} € (Saldo: ${nuovoSaldo.toLocaleString('it-IT')} €)`, ephemeral: true });
             }
         }
 
@@ -749,15 +762,15 @@ client.on('interactionCreate', async interaction => {
 
             if (pG === 21 && pB !== 21) {
                 const s = await modificaSaldo(user.id, Math.floor(importo * 2.5) - importo);
-                return interaction.reply({ content: `🃏 **BLACKJACK!** Carte: ${carteG.join(' ')} (${pG}) vs Banco: ${carteB.join(' ')} (${pB}) | Vincita: +${Math.floor(importo * 2.5)} € | Saldo: ${s} €`, flags: 64 });
+                return interaction.reply({ content: `🃏 **BLACKJACK!** Carte: ${carteG.join(' ')} (${pG}) vs Banco: ${carteB.join(' ')} (${pB}) | Vincita: +${Math.floor(importo * 2.5)} € | Saldo: ${s} €`, ephemeral: true });
             } else if (pG <= 21 && (pG > pB || pB > 21)) {
                 const s = await modificaSaldo(user.id, importo);
-                return interaction.reply({ content: `🃏 **VINTO!** Carte: ${carteG.join(' ')} (${pG}) vs Banco: ${carteB.join(' ')} (${pB}) | Vincita: +${importo * 2} € | Saldo: ${s} €`, flags: 64 });
+                return interaction.reply({ content: `🃏 **VINTO!** Carte: ${carteG.join(' ')} (${pG}) vs Banco: ${carteB.join(' ')} (${pB}) | Vincita: +${importo * 2} € | Saldo: ${s} €`, ephemeral: true });
             } else if (pG === pB) {
-                return interaction.reply({ content: `🃏 **PAREGGIO!** Carte: ${carteG.join(' ')} (${pG}) vs Banco: ${carteB.join(' ')} (${pB}) | Rimborso scommessa.`, flags: 64 });
+                return interaction.reply({ content: `🃏 **PAREGGIO!** Carte: ${carteG.join(' ')} (${pG}) vs Banco: ${carteB.join(' ')} (${pB}) | Rimborso scommessa.`, ephemeral: true });
             } else {
                 const s = await modificaSaldo(user.id, -importo);
-                return interaction.reply({ content: `🃏 **PERSO!** Carte: ${carteG.join(' ')} (${pG}) vs Banco: ${carteB.join(' ')} (${pB}) | Saldo: ${s} €`, flags: 64 });
+                return interaction.reply({ content: `🃏 **PERSO!** Carte: ${carteG.join(' ')} (${pG}) vs Banco: ${carteB.join(' ')} (${pB}) | Saldo: ${s} €`, ephemeral: true });
             }
         }
 
@@ -766,7 +779,7 @@ client.on('interactionCreate', async interaction => {
             const numPuntato = options.getInteger('numero_roulette');
 
             if (!scommessa && numPuntato === null) {
-                return interaction.reply({ content: '⚠️ Specifica la scommessa o il numero!', flags: 64 });
+                return interaction.reply({ content: '⚠️ Specifica la scommessa o il numero!', ephemeral: true });
             }
 
             const num = Math.floor(Math.random() * 37);
@@ -785,23 +798,23 @@ client.on('interactionCreate', async interaction => {
 
             if (vinto) {
                 const s = await modificaSaldo(user.id, (importo * molt) - importo);
-                return interaction.reply({ content: `🎯 Risultato: ${col} **${num}** — **VINTO!** +${importo * molt} € | Saldo: ${s} €`, flags: 64 });
+                return interaction.reply({ content: `🎯 Risultato: ${col} **${num}** — **VINTO!** +${importo * molt} € | Saldo: ${s} €`, ephemeral: true });
             } else {
                 const s = await modificaSaldo(user.id, -importo);
-                return interaction.reply({ content: `🎯 Risultato: ${col} **${num}** — **PERSO!** -${importo} € | Saldo: ${s} €`, flags: 64 });
+                return interaction.reply({ content: `🎯 Risultato: ${col} **${num}** — **PERSO!** -${importo} € | Saldo: ${s} €`, ephemeral: true });
             }
         }
     }
 
     if (commandName === 'classifica') {
         const res = await pool.query('SELECT user_id, saldo FROM conti WHERE ha_conto = 1 ORDER BY saldo DESC LIMIT 5');
-        if (res.rows.length === 0) return interaction.reply({ content: 'Nessun conto presente.', flags: 64 });
+        if (res.rows.length === 0) return interaction.reply({ content: 'Nessun conto presente.', ephemeral: true });
 
         let txt = '🏆 **TOP 5 CITTADINI PIÙ RICCHI**\n\n';
         res.rows.forEach((r, idx) => {
             txt += `${idx + 1}. <@${r.user_id}> — **${parseInt(r.saldo).toLocaleString('it-IT')} €**\n`;
         });
-        return interaction.reply({ content: txt, flags: 64 });
+        return interaction.reply({ content: txt, ephemeral: true });
     }
 });
 

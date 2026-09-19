@@ -302,15 +302,18 @@ client.on('messageCreate', async message => {
 client.on('interactionCreate', async interaction => {
     if (interaction.isButton()) {
         const { customId, user, guild, member } = interaction;
-        const userData = await getUtente(user.id);
 
         if (customId === 'apri_conto') {
+            // Differisci la risposta ephemerale per evitare il timeout dei 3 secondi
+            await interaction.deferReply({ flags: 64 });
+            const userData = await getUtente(user.id);
+
             if (userData.ha_conto === 1) {
-                return interaction.reply({ content: '⚠️ Risulta già attivo un conto corrente intestato a questo profilo.', ephemeral: true });
+                return interaction.editReply({ content: '⚠️ Risulta già attivo un conto corrente intestato a questo profilo.' });
             }
 
             const staffChannel = guild.channels.cache.get(CANALE_STAFF_ID);
-            if (!staffChannel) return interaction.reply({ content: '❌ Canale Staff non trovato.', ephemeral: true });
+            if (!staffChannel) return interaction.editReply({ content: '❌ Canale Staff non trovato.' });
 
             const embedStaff = new EmbedBuilder()
                 .setTitle('📋 NUOVA PRATICA APERTURA CONTO')
@@ -339,12 +342,15 @@ client.on('interactionCreate', async interaction => {
                 .setDescription('La tua richiesta di apertura conto è stata presa in carico dallo Staff.\nRiceverai una notifica non appena verrà revisionata.')
                 .setColor(0x3498DB);
 
-            return interaction.reply({ embeds: [embedConferma], ephemeral: true });
+            return interaction.editReply({ embeds: [embedConferma] });
         }
 
         if (customId.startsWith('approva_') || customId.startsWith('rifiuta_')) {
+            // Differisci l'aggiornamento del messaggio nel canale Staff
+            await interaction.deferUpdate();
+
             if (!member.roles.cache.has(RUOLO_STAFF_ID) && !member.roles.cache.has(RUOLO_ADMIN_ID)) {
-                return interaction.reply({ content: '🚫 Non sei autorizzato a gestire questa pratica.', ephemeral: true });
+                return interaction.followUp({ content: '🚫 Non sei autorizzato a gestire questa pratica.', flags: 64 });
             }
 
             const action = customId.split('_')[0];
@@ -381,7 +387,7 @@ client.on('interactionCreate', async interaction => {
                     .setFooter({ text: 'Pratica Chiusa • Banca RP' })
                     .setTimestamp();
 
-                await interaction.update({ embeds: [embedApproved], components: [] });
+                await interaction.editReply({ embeds: [embedApproved], components: [] });
 
             } else {
                 const embedRejected = new EmbedBuilder()
@@ -405,13 +411,16 @@ client.on('interactionCreate', async interaction => {
                     await targetMember.send({ embeds: [embedDM] }).catch(() => {});
                 }
 
-                await interaction.update({ embeds: [embedRejected], components: [] });
+                await interaction.editReply({ embeds: [embedRejected], components: [] });
             }
             return;
         }
 
         if (customId === 'saldo_rapido') {
-            if (userData.ha_conto === 0) return interaction.reply({ content: '❌ Nessun conto attivo trovato.', ephemeral: true });
+            await interaction.deferReply({ flags: 64 });
+            const userData = await getUtente(user.id);
+
+            if (userData.ha_conto === 0) return interaction.editReply({ content: '❌ Nessun conto attivo trovato.' });
 
             const embedSaldo = new EmbedBuilder()
                 .setTitle('💳 SALDO CONTO CORRENTE')
@@ -422,11 +431,14 @@ client.on('interactionCreate', async interaction => {
                 )
                 .setTimestamp();
 
-            return interaction.reply({ embeds: [embedSaldo], ephemeral: true });
+            return interaction.editReply({ embeds: [embedSaldo] });
         }
 
         if (customId === 'chiudi_conto') {
-            if (userData.ha_conto === 0) return interaction.reply({ content: '⚠️ Non possiedi un conto da chiudere.', ephemeral: true });
+            await interaction.deferReply({ flags: 64 });
+            const userData = await getUtente(user.id);
+
+            if (userData.ha_conto === 0) return interaction.editReply({ content: '⚠️ Non possiedi un conto da chiudere.' });
             await chiudiContoDb(user.id);
             const roleConto = guild.roles.cache.get(RUOLO_CONTO_ID);
             if (roleConto) await member.roles.remove(roleConto).catch(() => {});
@@ -436,7 +448,7 @@ client.on('interactionCreate', async interaction => {
                 .setDescription('Il tuo conto corrente è stato estinto con successo e il saldo è stato azzerato.')
                 .setColor(0xE74C3C);
 
-            return interaction.reply({ embeds: [embedChiusura], ephemeral: true });
+            return interaction.editReply({ embeds: [embedChiusura] });
         }
     }
 
@@ -450,7 +462,7 @@ client.on('interactionCreate', async interaction => {
         if (!member.roles.cache.has(RUOLO_ADMIN_ID)) {
             return interaction.reply({ 
                 content: `🚫 **Accesso Negato!** Solamente i membri con il ruolo Amministrazione (<@&${RUOLO_ADMIN_ID}>) possono utilizzare questo comando.`, 
-                ephemeral: true 
+                flags: 64 
             });
         }
     }
@@ -461,15 +473,15 @@ client.on('interactionCreate', async interaction => {
         const haStipendio500 = member.roles.cache.has(RUOLO_STIPENDIO_500_ID);
 
         if (!haDisoccupazione && !haStipendio500) {
-            return interaction.reply({ content: `❌ Non possiedi un ruolo idoneo per riscuotere uno stipendio.`, ephemeral: true });
+            return interaction.reply({ content: `❌ Non possiedi un ruolo idoneo per riscuotere uno stipendio.`, flags: 64 });
         }
-        if (userData.ha_conto === 0) return interaction.reply({ content: '❌ Devi prima aprire un conto corrente bancario per ricevere l\'accredito.', ephemeral: true });
+        if (userData.ha_conto === 0) return interaction.reply({ content: '❌ Devi prima aprire un conto corrente bancario per ricevere l\'accredito.', flags: 64 });
 
         const ORA = Date.now();
         const COOLDOWN = 24 * 60 * 60 * 1000;
         if (ORA - userData.ultimo_stipendio < COOLDOWN) {
             const ore = Math.ceil((COOLDOWN - (ORA - userData.ultimo_stipendio)) / (1000 * 60 * 60));
-            return interaction.reply({ content: `⏳ Hai già riscosso lo stipendio! Riprova tra **${ore} ore**.`, ephemeral: true });
+            return interaction.reply({ content: `⏳ Hai già riscosso lo stipendio! Riprova tra **${ore} ore**.`, flags: 64 });
         }
 
         let importoStipendio = haStipendio500 ? 500 : 100;
@@ -487,7 +499,7 @@ client.on('interactionCreate', async interaction => {
             .setFooter({ text: 'Banca Centrale Roleplay • Accrediti' })
             .setTimestamp();
 
-        return interaction.reply({ embeds: [embedStipendio], ephemeral: true });
+        return interaction.reply({ embeds: [embedStipendio], flags: 64 });
     }
 
     // COMANDO BONIFICO (PRIVATO CON EMBED)
@@ -496,10 +508,10 @@ client.on('interactionCreate', async interaction => {
         const importo = options.getInteger('importo');
         const destData = await getUtente(destinatario.id);
 
-        if (userData.ha_conto === 0) return interaction.reply({ content: '❌ Devi possedere un conto corrente per inviare un bonifico.', ephemeral: true });
-        if (destData.ha_conto === 0) return interaction.reply({ content: '❌ Il destinatario non possiede un conto corrente attivo.', ephemeral: true });
-        if (importo <= 0 || userData.saldo < importo) return interaction.reply({ content: '❌ Importo non valido o saldo bancario insufficiente.', ephemeral: true });
-        if (destinatario.id === user.id) return interaction.reply({ content: '❌ Non puoi inviare un bonifico a te stesso.', ephemeral: true });
+        if (userData.ha_conto === 0) return interaction.reply({ content: '❌ Devi possedere un conto corrente per inviare un bonifico.', flags: 64 });
+        if (destData.ha_conto === 0) return interaction.reply({ content: '❌ Il destinatario non possiede un conto corrente attivo.', flags: 64 });
+        if (importo <= 0 || userData.saldo < importo) return interaction.reply({ content: '❌ Importo non valido o saldo bancario insufficiente.', flags: 64 });
+        if (destinatario.id === user.id) return interaction.reply({ content: '❌ Non puoi inviare un bonifico a te stesso.', flags: 64 });
 
         const nuovoSaldoMittente = await modificaSaldo(user.id, -importo);
         const nuovoSaldoDestinatario = await modificaSaldo(destinatario.id, importo);
@@ -533,14 +545,14 @@ client.on('interactionCreate', async interaction => {
             await targetMember.send({ embeds: [embedDM] }).catch(() => {});
         }
 
-        return interaction.reply({ embeds: [embedMittente], ephemeral: true });
+        return interaction.reply({ embeds: [embedMittente], flags: 64 });
     }
 
     // COMANDO DEPOSITO (PRIVATO CON EMBED)
     if (commandName === 'deposito') {
         const importo = options.getInteger('importo');
         if (userData.ha_conto === 0 || importo <= 0 || userData.contanti < importo) {
-            return interaction.reply({ content: '❌ Operazione non valida o contanti in tasca insufficienti.', ephemeral: true });
+            return interaction.reply({ content: '❌ Operazione non valida o contanti in tasca insufficienti.', flags: 64 });
         }
 
         const nuoviContanti = await modificaContanti(user.id, -importo);
@@ -557,21 +569,21 @@ client.on('interactionCreate', async interaction => {
             .setFooter({ text: 'Banca Centrale Roleplay' })
             .setTimestamp();
 
-        return interaction.reply({ embeds: [embedDeposito], ephemeral: true });
+        return interaction.reply({ embeds: [embedDeposito], flags: 64 });
     }
 
     // COMANDO PRELIEVO (PRIVATO CON EMBED)
     if (commandName === 'prelievo') {
         const importo = options.getInteger('importo');
         if (userData.ha_conto === 0 || importo <= 0 || userData.saldo < importo) {
-            return interaction.reply({ content: '❌ Operazione non valida o saldo bancario insufficiente.', ephemeral: true });
+            return interaction.reply({ content: '❌ Operazione non valida o saldo bancario insufficiente.', flags: 64 });
         }
 
         const nuovoSaldo = await modificaSaldo(user.id, -importo);
         const nuoviContanti = await modificaContanti(user.id, importo);
 
         const embedPrelievo = new EmbedBuilder()
-            .setTitle('🏧 PRELIEVO CONTANTI ESEGUITO')
+            .setTitle('ATM PRELIEVO CONTANTI ESEGUITO')
             .setColor(0xE67E22)
             .addFields(
                 { name: '💵 Contanti Prelevati', value: `\`${importo.toLocaleString('it-IT')} €\``, inline: true },
@@ -581,14 +593,14 @@ client.on('interactionCreate', async interaction => {
             .setFooter({ text: 'Banca Centrale Roleplay' })
             .setTimestamp();
 
-        return interaction.reply({ embeds: [embedPrelievo], ephemeral: true });
+        return interaction.reply({ embeds: [embedPrelievo], flags: 64 });
     }
 
     // COMANDI AMMINISTRAZIONE (PRIVATI CON EMBED)
     if (commandName === 'paga') {
         const target = options.getUser('utente');
         const importo = options.getInteger('importo');
-        if (importo <= 0) return interaction.reply({ content: '❌ Inserisci un importo valido.', ephemeral: true });
+        if (importo <= 0) return interaction.reply({ content: '❌ Inserisci un importo valido.', flags: 64 });
 
         const s = await modificaSaldo(target.id, importo);
         const embed = new EmbedBuilder()
@@ -602,13 +614,13 @@ client.on('interactionCreate', async interaction => {
             .setFooter({ text: 'Registro Operazioni Riservate' })
             .setTimestamp();
 
-        return interaction.reply({ embeds: [embed], ephemeral: true });
+        return interaction.reply({ embeds: [embed], flags: 64 });
     }
 
     if (commandName === 'multa') {
         const target = options.getUser('utente');
         const importo = options.getInteger('importo');
-        if (importo <= 0) return interaction.reply({ content: '❌ Inserisci un importo valido.', ephemeral: true });
+        if (importo <= 0) return interaction.reply({ content: '❌ Inserisci un importo valido.', flags: 64 });
 
         const s = await modificaSaldo(target.id, -importo);
         const embed = new EmbedBuilder()
@@ -622,13 +634,13 @@ client.on('interactionCreate', async interaction => {
             .setFooter({ text: 'Registro Operazioni Riservate' })
             .setTimestamp();
 
-        return interaction.reply({ embeds: [embed], ephemeral: true });
+        return interaction.reply({ embeds: [embed], flags: 64 });
     }
 
     if (commandName === 'set-saldo') {
         const target = options.getUser('utente');
         const importo = options.getInteger('importo');
-        if (importo < 0) return interaction.reply({ content: '❌ L\'importo non può essere negativo.', ephemeral: true });
+        if (importo < 0) return interaction.reply({ content: '❌ L\'importo non può essere negativo.', flags: 64 });
 
         await impostaSaldoFisso(target.id, importo);
 
@@ -643,13 +655,13 @@ client.on('interactionCreate', async interaction => {
             .setFooter({ text: 'Registro Operazioni Riservate' })
             .setTimestamp();
 
-        return interaction.reply({ embeds: [embedSet], ephemeral: true });
+        return interaction.reply({ embeds: [embedSet], flags: 64 });
     }
 
     if (commandName === 'set-contanti') {
         const target = options.getUser('utente');
         const importo = options.getInteger('importo');
-        if (importo < 0) return interaction.reply({ content: '❌ L\'importo non può essere negativo.', ephemeral: true });
+        if (importo < 0) return interaction.reply({ content: '❌ L\'importo non può essere negativo.', flags: 64 });
 
         await impostaContantiFissi(target.id, importo);
 
@@ -664,7 +676,7 @@ client.on('interactionCreate', async interaction => {
             .setFooter({ text: 'Registro Operazioni Riservate' })
             .setTimestamp();
 
-        return interaction.reply({ embeds: [embedSet], ephemeral: true });
+        return interaction.reply({ embeds: [embedSet], flags: 64 });
     }
 
     if (commandName === 'reset-conto') {
@@ -679,13 +691,13 @@ client.on('interactionCreate', async interaction => {
             .setFooter({ text: 'Registro Operazioni Riservate' })
             .setTimestamp();
 
-        return interaction.reply({ embeds: [embedReset], ephemeral: true });
+        return interaction.reply({ embeds: [embedReset], flags: 64 });
     }
 
     if (commandName === 'conto') {
         const target = options.getUser('utente') || user;
         const targetData = await getUtente(target.id);
-        if (targetData.ha_conto === 0) return interaction.reply({ content: '❌ Nessun conto attivo trovato per questo cittadino.', ephemeral: true });
+        if (targetData.ha_conto === 0) return interaction.reply({ content: '❌ Nessun conto attivo trovato per questo cittadino.', flags: 64 });
 
         const embed = new EmbedBuilder()
             .setTitle('🏛️ ESTRATTO CONTO UFFICIALE')
@@ -699,7 +711,7 @@ client.on('interactionCreate', async interaction => {
             .setFooter({ text: 'Banca Centrale Roleplay' })
             .setTimestamp();
 
-        return interaction.reply({ embeds: [embed], ephemeral: true });
+        return interaction.reply({ embeds: [embed], flags: 64 });
     }
 
     if (commandName === 'casino') {
@@ -707,7 +719,7 @@ client.on('interactionCreate', async interaction => {
         const importo = options.getInteger('importo');
 
         if (userData.ha_conto === 0 || importo <= 0 || userData.saldo < importo) {
-            return interaction.reply({ content: '❌ Saldo insufficiente o conto assente.', ephemeral: true });
+            return interaction.reply({ content: '❌ Saldo insufficiente o conto assente.', flags: 64 });
         }
 
         if (gioco === 'slot') {
@@ -722,10 +734,10 @@ client.on('interactionCreate', async interaction => {
 
             if (molt > 0) {
                 const nuovoSaldo = await modificaSaldo(user.id, (importo * molt) - importo);
-                return interaction.reply({ content: `🎰 [ ${s1} | ${s2} | ${s3} ] — **VINTO!** +${(importo * molt).toLocaleString('it-IT')} € (Saldo: ${nuovoSaldo.toLocaleString('it-IT')} €)`, ephemeral: true });
+                return interaction.reply({ content: `🎰 [ ${s1} | ${s2} | ${s3} ] — **VINTO!** +${(importo * molt).toLocaleString('it-IT')} € (Saldo: ${nuovoSaldo.toLocaleString('it-IT')} €)`, flags: 64 });
             } else {
                 const nuovoSaldo = await modificaSaldo(user.id, -importo);
-                return interaction.reply({ content: `🎰 [ ${s1} | ${s2} | ${s3} ] — **PERSO!** -${importo.toLocaleString('it-IT')} € (Saldo: ${nuovoSaldo.toLocaleString('it-IT')} €)`, ephemeral: true });
+                return interaction.reply({ content: `🎰 [ ${s1} | ${s2} | ${s3} ] — **PERSO!** -${importo.toLocaleString('it-IT')} € (Saldo: ${nuovoSaldo.toLocaleString('it-IT')} €)`, flags: 64 });
             }
         }
 
@@ -737,15 +749,15 @@ client.on('interactionCreate', async interaction => {
 
             if (pG === 21 && pB !== 21) {
                 const s = await modificaSaldo(user.id, Math.floor(importo * 2.5) - importo);
-                return interaction.reply({ content: `🃏 **BLACKJACK!** Carte: ${carteG.join(' ')} (${pG}) vs Banco: ${carteB.join(' ')} (${pB}) | Vincita: +${Math.floor(importo * 2.5)} € | Saldo: ${s} €`, ephemeral: true });
+                return interaction.reply({ content: `🃏 **BLACKJACK!** Carte: ${carteG.join(' ')} (${pG}) vs Banco: ${carteB.join(' ')} (${pB}) | Vincita: +${Math.floor(importo * 2.5)} € | Saldo: ${s} €`, flags: 64 });
             } else if (pG <= 21 && (pG > pB || pB > 21)) {
                 const s = await modificaSaldo(user.id, importo);
-                return interaction.reply({ content: `🃏 **VINTO!** Carte: ${carteG.join(' ')} (${pG}) vs Banco: ${carteB.join(' ')} (${pB}) | Vincita: +${importo * 2} € | Saldo: ${s} €`, ephemeral: true });
+                return interaction.reply({ content: `🃏 **VINTO!** Carte: ${carteG.join(' ')} (${pG}) vs Banco: ${carteB.join(' ')} (${pB}) | Vincita: +${importo * 2} € | Saldo: ${s} €`, flags: 64 });
             } else if (pG === pB) {
-                return interaction.reply({ content: `🃏 **PAREGGIO!** Carte: ${carteG.join(' ')} (${pG}) vs Banco: ${carteB.join(' ')} (${pB}) | Rimborso scommessa.`, ephemeral: true });
+                return interaction.reply({ content: `🃏 **PAREGGIO!** Carte: ${carteG.join(' ')} (${pG}) vs Banco: ${carteB.join(' ')} (${pB}) | Rimborso scommessa.`, flags: 64 });
             } else {
                 const s = await modificaSaldo(user.id, -importo);
-                return interaction.reply({ content: `🃏 **PERSO!** Carte: ${carteG.join(' ')} (${pG}) vs Banco: ${carteB.join(' ')} (${pB}) | Saldo: ${s} €`, ephemeral: true });
+                return interaction.reply({ content: `🃏 **PERSO!** Carte: ${carteG.join(' ')} (${pG}) vs Banco: ${carteB.join(' ')} (${pB}) | Saldo: ${s} €`, flags: 64 });
             }
         }
 
@@ -754,7 +766,7 @@ client.on('interactionCreate', async interaction => {
             const numPuntato = options.getInteger('numero_roulette');
 
             if (!scommessa && numPuntato === null) {
-                return interaction.reply({ content: '⚠️ Specifica la scommessa o il numero!', ephemeral: true });
+                return interaction.reply({ content: '⚠️ Specifica la scommessa o il numero!', flags: 64 });
             }
 
             const num = Math.floor(Math.random() * 37);
@@ -773,23 +785,23 @@ client.on('interactionCreate', async interaction => {
 
             if (vinto) {
                 const s = await modificaSaldo(user.id, (importo * molt) - importo);
-                return interaction.reply({ content: `🎯 Risultato: ${col} **${num}** — **VINTO!** +${importo * molt} € | Saldo: ${s} €`, ephemeral: true });
+                return interaction.reply({ content: `🎯 Risultato: ${col} **${num}** — **VINTO!** +${importo * molt} € | Saldo: ${s} €`, flags: 64 });
             } else {
                 const s = await modificaSaldo(user.id, -importo);
-                return interaction.reply({ content: `🎯 Risultato: ${col} **${num}** — **PERSO!** -${importo} € | Saldo: ${s} €`, ephemeral: true });
+                return interaction.reply({ content: `🎯 Risultato: ${col} **${num}** — **PERSO!** -${importo} € | Saldo: ${s} €`, flags: 64 });
             }
         }
     }
 
     if (commandName === 'classifica') {
         const res = await pool.query('SELECT user_id, saldo FROM conti WHERE ha_conto = 1 ORDER BY saldo DESC LIMIT 5');
-        if (res.rows.length === 0) return interaction.reply({ content: 'Nessun conto presente.', ephemeral: true });
+        if (res.rows.length === 0) return interaction.reply({ content: 'Nessun conto presente.', flags: 64 });
 
         let txt = '🏆 **TOP 5 CITTADINI PIÙ RICCHI**\n\n';
         res.rows.forEach((r, idx) => {
             txt += `${idx + 1}. <@${r.user_id}> — **${parseInt(r.saldo).toLocaleString('it-IT')} €**\n`;
         });
-        return interaction.reply({ content: txt, ephemeral: true });
+        return interaction.reply({ content: txt, flags: 64 });
     }
 });
 
